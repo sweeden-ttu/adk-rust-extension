@@ -7,7 +7,8 @@
  */
 
 import * as vscode from 'vscode';
-import { spawn, execFileSync, ChildProcess } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
+import { resolveAdkStudioBinaryPath } from './environmentChecker';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -217,18 +218,21 @@ export class StudioManager implements vscode.Disposable {
   }
 
   /**
-   * Checks whether the adk-studio binary is available on PATH or at the configured path.
+   * Checks whether the adk-studio binary exists (PATH, ~/.cargo/bin, or configured path).
    *
-   * @returns `true` if the binary can be found and executed with `--version`
+   * Does not run `adk-studio --version` — that can start the server instead of printing a version.
    */
   isBinaryInstalled(): boolean {
-    const binary = this.config.binaryPath || 'adk-studio';
-    try {
-      execFileSync(binary, ['--version'], { stdio: 'ignore', timeout: 3000 });
-      return true;
-    } catch {
-      return false;
-    }
+    return resolveAdkStudioBinaryPath(this.config.binaryPath) !== null;
+  }
+
+  /** Resolved binary for spawning; falls back to configured string or `adk-studio`. */
+  private resolvedStudioBinary(): string {
+    return (
+      resolveAdkStudioBinaryPath(this.config.binaryPath) ??
+      this.config.binaryPath ??
+      'adk-studio'
+    );
   }
 
   /**
@@ -252,7 +256,7 @@ export class StudioManager implements vscode.Disposable {
       return this.getServerStatus();
     }
 
-    const binary = this.config.binaryPath || 'adk-studio';
+    const binary = this.resolvedStudioBinary();
     const args = ['--port', this.config.port.toString()];
 
     this.log(`Starting ADK Studio server: ${binary} ${args.join(' ')}`);

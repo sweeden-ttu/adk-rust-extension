@@ -1,5 +1,7 @@
 import { spawn } from 'child_process';
 import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
 /**
  * Status of a tool in the development environment.
@@ -63,16 +65,126 @@ export interface CheckToolOptions {
  *   showInstallationGuide('rustc');
  * }
  */
+/**
+ * Cargo install locations for the `adk-studio` binary (often missing from GUI app PATH).
+ */
+function cargoBinDirectories(): string[] {
+  const dirs: string[] = [];
+  if (process.env.CARGO_HOME) {
+    dirs.push(path.join(process.env.CARGO_HOME, 'bin'));
+  }
+  const home = os.homedir();
+  if (home) {
+    dirs.push(path.join(home, '.cargo', 'bin'));
+  }
+  return dirs;
+}
+
+function pathEnvDirectories(): string[] {
+  const p = process.env.PATH ?? process.env.Path ?? '';
+  return p.split(path.delimiter).filter(Boolean);
+}
+
+/** Executable names for `cargo install adk-studio` per platform. */
+function adkStudioFilenames(): string[] {
+  return process.platform === 'win32'
+    ? ['adk-studio.exe', 'adk-studio.cmd', 'adk-studio.bat', 'adk-studio']
+    : ['adk-studio'];
+}
+
+/**
+ * Resolves the `adk-studio` binary without executing it.
+ *
+ * The published CLI does not reliably support `--version` (it may start the HTTP server),
+ * so installation is detected by locating an executable file on PATH or in Cargo bin dirs.
+ *
+ * @param customPath - User-configured absolute path to the binary, if any
+ * @param pathEnv - When set, only these PATH entries are searched (plus `customPath`). When `''`, only customPath applies.
+ */
+export function resolveAdkStudioBinaryPath(
+  customPath?: string | null,
+  pathEnv?: string
+): string | null {
+  if (customPath?.trim()) {
+    const abs = path.isAbsolute(customPath)
+      ? customPath
+      : path.resolve(customPath);
+    if (fs.existsSync(abs)) {
+      return abs;
+    }
+    return null;
+  }
+
+  let searchDirs: string[];
+  if (pathEnv !== undefined) {
+    searchDirs = pathEnv.split(path.delimiter).filter(Boolean);
+  } else {
+    searchDirs = [...cargoBinDirectories(), ...pathEnvDirectories()];
+  }
+
+  const seen = new Set<string>();
+  const names = adkStudioFilenames();
+
+  for (const dir of searchDirs) {
+    let resolved: string;
+    try {
+      resolved = path.resolve(dir);
+    } catch {
+      continue;
+    }
+    if (seen.has(resolved)) {
+      continue;
+    }
+    seen.add(resolved);
+
+    for (const name of names) {
+      const full = path.join(resolved, name);
+      if (!fs.existsSync(full) || !fs.statSync(full).isFile()) {
+        continue;
+      }
+      if (process.platform === 'win32') {
+        return full;
+      }
+      try {
+        fs.accessSync(full, fs.constants.X_OK);
+        return full;
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  return null;
+}
+
 export async function checkTool(
   name: string,
   command: string,
   options: CheckToolOptions = {}
 ): Promise<ToolStatus> {
   const { customPath, pathEnv, timeout = 5000 } = options;
-  
+
+  if (command === 'adk-studio') {
+    const found = resolveAdkStudioBinaryPath(customPath ?? null, pathEnv);
+    if (found) {
+      return {
+        available: true,
+        path: found,
+        version: null,
+        error: null,
+      };
+    }
+    return {
+      available: false,
+      path: null,
+      version: null,
+      error: `${name} not found in PATH or Cargo bin directories (~/.cargo/bin, CARGO_HOME/bin)`,
+    };
+  }
+
   // Determine the actual command to run
   const actualCommand = customPath || command;
-  
+
   try {
     const result = await executeVersionCheck(actualCommand, pathEnv, timeout);
     
@@ -267,9 +379,16 @@ export function getInstallationGuide(tool: string): string {
         '',
         '## Verify Installation',
         '',
+        'The CLI may start the server instead of printing a version for `--version`.',
+        'Confirm the binary exists:',
+        '',
         '```sh',
-        'adk-studio --version',
+        'which adk-studio    # macOS / Linux',
+        'where adk-studio    # Windows CMD',
         '```',
+        '',
+        'If VS Code was opened from the Dock/Finder and does not see `~/.cargo/bin`,',
+        'set **Adk Studio: Path** in settings to the full path of `adk-studio`.',
         '',
         'After installing, restart the environment check or reopen VS Code.',
       ].join('\n');

@@ -14,7 +14,18 @@ import * as fc from 'fast-check';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { checkTool, getInstallationGuide, ToolStatus, checkApiKeys, parseEnvContent, ApiKeyStatus, checkEnvironment, DEFAULT_API_KEYS, updateEnvKey } from './environmentChecker';
+import {
+  checkTool,
+  getInstallationGuide,
+  ToolStatus,
+  checkApiKeys,
+  parseEnvContent,
+  ApiKeyStatus,
+  checkEnvironment,
+  DEFAULT_API_KEYS,
+  updateEnvKey,
+  resolveAdkStudioBinaryPath,
+} from './environmentChecker';
 import { FC_CONFIG, toolNameArb, envVarNameArb } from './test/testUtils';
 
 describe('EnvironmentChecker', () => {
@@ -45,10 +56,9 @@ describe('EnvironmentChecker', () => {
           // Property: Result must always be a valid ToolStatus
           assertValidToolStatus(result);
           
-          // Property: If available, path and version must be non-null
+          // Property: If available, path must be set; version may be null (e.g. adk-studio)
           if (result.available) {
             assert.notStrictEqual(result.path, null, 'Available tool must have path');
-            // Version can be null if parsing fails, but path must exist
             assert.strictEqual(result.error, null, 'Available tool must not have error');
           }
           
@@ -142,6 +152,39 @@ describe('EnvironmentChecker', () => {
       
       assertValidToolStatus(result);
       // Result should be valid regardless of whether it timed out
+    });
+  });
+
+  describe('resolveAdkStudioBinaryPath', () => {
+    it('returns absolute custom path when the file exists', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'adk-studio-resolve-'));
+      const bin = path.join(dir, 'adk-studio');
+      fs.writeFileSync(bin, '#!/bin/sh\necho ok\n');
+      if (process.platform !== 'win32') {
+        fs.chmodSync(bin, 0o755);
+      }
+      assert.strictEqual(resolveAdkStudioBinaryPath(bin), path.resolve(bin));
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('returns null when custom path does not exist', () => {
+      assert.strictEqual(resolveAdkStudioBinaryPath('/nonexistent/adk-studio-xyz'), null);
+    });
+
+    it('finds adk-studio in a directory from pathEnv only', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'adk-studio-path-'));
+      const bin = path.join(dir, 'adk-studio');
+      fs.writeFileSync(bin, '#!/bin/sh\necho ok\n');
+      if (process.platform !== 'win32') {
+        fs.chmodSync(bin, 0o755);
+      }
+      const found = resolveAdkStudioBinaryPath(null, dir);
+      assert.strictEqual(found, bin);
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('returns null for empty pathEnv when no custom path', () => {
+      assert.strictEqual(resolveAdkStudioBinaryPath(null, ''), null);
     });
   });
 });
